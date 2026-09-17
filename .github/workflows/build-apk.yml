@@ -1,0 +1,74 @@
+name: Build APK
+
+# Is repo me kuch bhi upload karte hi ye file apne aap chalti hai
+# aur APK bana kar "Releases" me download link de deti hai.
+# Manual chalane ke liye: Actions tab > Build APK > Run workflow
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 1) Code checkout
+        uses: actions/checkout@v4
+
+      - name: 2) Android project files banao
+        run: |
+          if [ ! -f Create-Files.sh ]; then
+            echo "Create-Files.sh repo me nahi mila - pehle use upload karein."
+            exit 1
+          fi
+          bash Create-Files.sh
+
+      - name: 3) Java 17 setup
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 4) Android SDK setup
+        uses: android-actions/setup-android@v3
+
+      - name: 5) Gradle 8.7 setup
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.7'
+
+      - name: 6) APK build
+        working-directory: android
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          SDKM="$(command -v sdkmanager || true)"
+          if [ -z "$SDKM" ] && [ -x "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" ]; then
+            SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          if [ -n "$SDKM" ]; then
+            yes | "$SDKM" --licenses > /dev/null 2>&1 || true
+            "$SDKM" "platforms;android-34" "build-tools;34.0.0" > /dev/null 2>&1 || true
+          fi
+          gradle --no-daemon assembleDebug
+
+      - name: 7) APK ka download link banao
+        continue-on-error: true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          name: Budget Manager APK (latest)
+          body: |
+            Ready APK - phone me install karein.
+            (Settings me "Install unknown apps" allow karna hoga.)
+          files: android/app/build/outputs/apk/debug/app-debug.apk
+
+      - name: 8) Backup - APK run ke andar bhi
+        uses: actions/upload-artifact@v4
+        with:
+          name: BudgetManager-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
