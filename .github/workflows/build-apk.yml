@@ -1,0 +1,99 @@
+name: Build APK
+
+# Is repo me kuch bhi upload/push karte hi ye file apne aap chalti hai
+# aur APK bana kar "Releases" me download link de deti hai.
+# Manual chalane ke liye: Actions tab > Build APK > Run workflow
+on:
+  push:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: 1) Code checkout
+        uses: actions/checkout@v4
+
+      - name: 2) Android project files banao
+        run: |
+          if [ ! -f Create-Files.sh ]; then
+            echo "Create-Files.sh repo me nahi mila - pehle use upload karein."
+            exit 1
+          fi
+          bash Create-Files.sh
+          ls -la android
+
+      - name: 3) Java 17 setup
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 4) Gradle 8.7 download
+        run: |
+          curl -sSL -o "$RUNNER_TEMP/gradle.zip" https://services.gradle.org/distributions/gradle-8.7-bin.zip
+          unzip -q "$RUNNER_TEMP/gradle.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/gradle-8.7/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/gradle-8.7/bin/gradle" --version
+
+      - name: 5) Android SDK taiyar karo
+        run: |
+          set -x
+          install_pkgs() {
+            local sdk="$1"
+            local sdkm="$sdk/cmdline-tools/latest/bin/sdkmanager"
+            [ -x "$sdkm" ] || return 1
+            yes | "$sdkm" --sdk_root="$sdk" --licenses > /dev/null 2>&1 || true
+            "$sdkm" --sdk_root="$sdk" "platforms;android-34" "build-tools;34.0.0"
+          }
+
+          SDK="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-/usr/local/lib/android/sdk}}"
+          if ! install_pkgs "$SDK"; then
+            echo "Runner ka SDK use nahi ho paya - apna SDK bana rahe hain."
+            SDK="$RUNNER_TEMP/android-sdk"
+            mkdir -p "$SDK/cmdline-tools"
+            curl -sSL -o "$RUNNER_TEMP/cmdline.zip" https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+            unzip -q "$RUNNER_TEMP/cmdline.zip" -d "$SDK/cmdline-tools"
+            mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
+            install_pkgs "$SDK"
+          fi
+
+          echo "SDK = $SDK"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          ls "$SDK/platforms" || true
+          ls "$SDK/build-tools" || true
+
+      - name: 6) APK build
+        working-directory: android
+        run: |
+          echo "sdk.dir=${ANDROID_SDK_ROOT}" > local.properties
+          cat local.properties
+          "$RUNNER_TEMP/gradle-8.7/bin/gradle" --no-daemon --stacktrace assembleDebug
+          ls -la app/build/outputs/apk/debug/
+
+      - name: 7) APK ka naam theek karo
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk BudgetManager.apk
+
+      - name: 8) APK ka download link banao
+        continue-on-error: true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-latest
+          name: Budget Manager APK (latest)
+          body: |
+            Ready APK - phone me install karein.
+            (Settings me "Install unknown apps" allow karna hoga.)
+          files: BudgetManager.apk
+
+      - name: 9) Backup - APK run ke andar bhi milegi
+        uses: actions/upload-artifact@v4
+        with:
+          name: BudgetManager-apk
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
